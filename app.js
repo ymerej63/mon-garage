@@ -88,6 +88,70 @@ function viewPhoto(id, onDelete) {
   $('#vClose').onclick = () => v.hidden = true;
   if (onDelete) $('#vDel').onclick = () => { if (confirm('Supprimer cette photo ?')) { v.hidden = true; onDelete(); } };
 }
+// Écran de recadrage : glisser pour déplacer, pincer ou curseur pour zoomer. Renvoie un Blob JPEG 16:10 (ou null si annulé).
+function cropImage(blob, ratio = 16 / 10, outW = 1200) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.className = 'cropper';
+    ov.innerHTML = `<div class="crop-head">Recadrer la photo</div>
+      <div class="crop-stage"><div class="crop-frame"><img alt=""></div></div>
+      <div class="crop-tools"><span class="hint">Glissez pour déplacer · pincez pour zoomer</span>
+        <input type="range" min="1" max="4" step="0.01" value="1" class="crop-zoom">
+        <div class="crop-btns"><button class="btn btn-ghost" data-a="cancel">Annuler</button><button class="btn btn-primary" data-a="ok">Valider</button></div></div>`;
+    document.body.appendChild(ov);
+    const frame = $('.crop-frame', ov), img = $('img', ov), zoom = $('.crop-zoom', ov);
+    const url = URL.createObjectURL(blob);
+    let W, H, iw, ih, min, s, x, y;
+    const pts = new Map(); let last = null;
+
+    const clamp = () => {
+      s = Math.max(min, Math.min(min * 4, s));
+      x = Math.min(0, Math.max(W - iw * s, x));
+      y = Math.min(0, Math.max(H - ih * s, y));
+      img.style.transform = `translate(${x}px,${y}px) scale(${s})`;
+      zoom.value = s / min;
+    };
+    const zoomAt = (ns, cx, cy) => { const k = ns / s; x = cx - (cx - x) * k; y = cy - (cy - y) * k; s = ns; clamp(); };
+    const layout = () => {
+      const st = $('.crop-stage', ov).getBoundingClientRect();
+      W = Math.min(st.width - 32, (st.height - 32) * ratio); H = W / ratio;
+      frame.style.width = W + 'px'; frame.style.height = H + 'px';
+      min = Math.max(W / iw, H / ih); s = min; x = (W - iw * s) / 2; y = (H - ih * s) / 2; clamp();
+    };
+    img.onload = () => { iw = img.naturalWidth; ih = img.naturalHeight; layout(); };
+    img.src = url;
+
+    const local = e => { const r = frame.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    const state = () => {
+      const p = [...pts.values()];
+      if (p.length >= 2) return { mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2, d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) };
+      return p.length ? { mx: p[0].x, my: p[0].y, d: 0 } : null;
+    };
+    frame.onpointerdown = e => { frame.setPointerCapture(e.pointerId); pts.set(e.pointerId, local(e)); last = state(); };
+    frame.onpointermove = e => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, local(e)); const st = state();
+      if (last) {
+        x += st.mx - last.mx; y += st.my - last.my;
+        if (st.d && last.d) zoomAt(s * st.d / last.d, st.mx, st.my); else clamp();
+      }
+      last = st;
+    };
+    frame.onpointerup = frame.onpointercancel = e => { pts.delete(e.pointerId); last = state(); };
+    frame.onwheel = e => { e.preventDefault(); const p = local(e); zoomAt(s * (e.deltaY < 0 ? 1.1 : 0.9), p.x, p.y); };
+    zoom.oninput = () => zoomAt(min * Number(zoom.value), W / 2, H / 2);
+    window.addEventListener('resize', layout);
+
+    const close = r => { window.removeEventListener('resize', layout); URL.revokeObjectURL(url); ov.remove(); resolve(r); };
+    $('[data-a=cancel]', ov).onclick = () => close(null);
+    $('[data-a=ok]', ov).onclick = () => {
+      const cv = document.createElement('canvas'); cv.width = outW; cv.height = Math.round(outW / ratio);
+      cv.getContext('2d').drawImage(img, -x / s, -y / s, W / s, H / s, 0, 0, cv.width, cv.height);
+      cv.toBlob(b => close(b), 'image/jpeg', 0.85);
+    };
+  });
+}
+
 function carVisual(c, cls = '') {
   return c.photoId ? `<img class="car-photo ${cls}" data-photo="${c.photoId}" alt="">` : silhouette(c.couleur);
 }
@@ -191,7 +255,7 @@ function vCar({ id }) {
       <div class="hero-visual" id="carPic">${carVisual(c)}
         <button class="photo-btn" id="chgPhoto" aria-label="Changer la photo"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
       </div>
-      <div class="photo-links"><a id="chgPhoto2">${c.photoId ? 'Changer la photo' : 'Ajouter une photo'}</a>${c.photoId ? ' · <a id="rmPhoto">Retirer</a>' : ''}</div>
+      <div class="photo-links"><a id="chgPhoto2">${c.photoId ? 'Changer la photo' : 'Ajouter une photo'}</a>${c.photoId ? ' · <a id="cropPhoto">Recadrer</a> · <a id="rmPhoto">Retirer</a>' : ''}</div>
       ${c.surnom ? `<div class="nick">${esc(c.surnom)}</div>` : ''}
       ${c.immat ? `<div class="plate">${esc(c.immat)}</div>` : ''}
       <button class="btn btn-outline" id="details">Voir les détails de la voiture</button>
@@ -244,6 +308,10 @@ function vCar({ id }) {
     ${hist.length ? `<div class="section-title">Derniers entretiens ${hist.length > 4 ? '<a id="seeHist2">Tout voir ›</a>' : ''}</div>
       <div class="card">${hist.slice(0, 4).map(histRow).join('')}</div>` : ''}
 
+    <div class="section-title">Dossier du véhicule</div>
+    <button class="btn btn-ghost" id="pdf">Générer le PDF du véhicule</button>
+    <div class="hint">Caractéristiques, contrôle technique, historique d'entretien détaillé et photos du PV.</div>
+
     <div class="section-title">Rappels</div>
     <button class="btn btn-ghost" id="ics">Ajouter les rappels à mon calendrier</button>
     <div class="hint">Crée des événements avec alerte (30 j, 7 j et la veille) pour le CT et les entretiens datés.</div>
@@ -256,21 +324,48 @@ function vCar({ id }) {
   $('#editPlan').onclick = () => go('plan', { id });
   $('#addEnt').onclick = () => go('entretien', { carId: id });
   $('#ics').onclick = () => exportICS([c]);
+  $('#pdf').onclick = async () => {
+    const btn = $('#pdf'); btn.disabled = true; btn.textContent = 'Génération du PDF…';
+    try {
+      const blob = await buildPDF(c);
+      const slug = C.nomVoiture(c).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'vehicule';
+      const name = 'dossier-' + slug + '-' + C.iso(C.today()) + '.pdf';
+      // Une feuille avec un bouton : le partage iOS exige un appui direct de l'utilisateur
+      const sheet = $('#sheet'), bd = $('#sheet-backdrop'), close = () => sheet.hidden = bd.hidden = true;
+      sheet.innerHTML = `<div class="grab"></div><h2>PDF prêt</h2><div class="card pad"><b>${esc(name)}</b><div class="hint" style="padding:4px 0 0">${Math.max(1, Math.round(blob.size / 1024))} Ko</div></div>
+        <button class="btn btn-primary" style="margin-top:16px" id="pdfShare">Partager ou enregistrer</button><button class="btn btn-ghost" id="pdfClose">Fermer</button>`;
+      $('#pdfShare').onclick = () => shareOrDownload(name, blob, 'application/pdf');
+      $('#pdfClose').onclick = bd.onclick = close;
+      sheet.hidden = bd.hidden = false;
+    } catch (e) { toast('Impossible de générer le PDF'); }
+    btn.disabled = false; btn.textContent = 'Générer le PDF du véhicule';
+  };
   $$('.due').forEach(el => el.onclick = () => go('entretien', { carId: id, preset: el.dataset.type }));
   $$('.hist').forEach(el => el.onclick = () => go('entretien', { carId: id, entId: el.dataset.id }));
 
+  // Enregistre la photo recadrée + l'original (pour pouvoir recadrer plus tard)
+  const setCarPhoto = async (orig, isNew) => {
+    const cropped = await cropImage(orig); if (!cropped) return;
+    const pid = 'car-' + uid(); await Photos.put(pid, cropped);
+    if (c.photoId) Photos.del(c.photoId);
+    if (isNew) { const oid = 'orig-' + uid(); await Photos.put(oid, orig); if (c.photoOrigId) Photos.del(c.photoOrigId); c.photoOrigId = oid; }
+    c.photoId = pid; save(); render(); toast('Photo mise à jour');
+  };
   const changePhoto = async () => {
     const [f] = await pickImages(false); if (!f) return;
-    try {
-      const blob = await compress(f, 1200, 0.82), pid = 'car-' + uid();
-      await Photos.put(pid, blob);
-      if (c.photoId) Photos.del(c.photoId);
-      c.photoId = pid; save(); render(); toast('Photo mise à jour');
-    } catch (e) { toast('Impossible de lire cette image'); }
+    try { await setCarPhoto(await compress(f, 2000, 0.88), true); } catch (e) { toast('Impossible de lire cette image'); }
   };
   $('#chgPhoto').onclick = changePhoto;
   $('#chgPhoto2').onclick = changePhoto;
-  if ($('#rmPhoto')) $('#rmPhoto').onclick = () => { if (!confirm('Retirer la photo du véhicule ?')) return; Photos.del(c.photoId); c.photoId = ''; save(); render(); };
+  if ($('#cropPhoto')) $('#cropPhoto').onclick = async () => {
+    const orig = await Photos.get(c.photoOrigId || c.photoId);
+    if (orig) setCarPhoto(orig, false);
+  };
+  if ($('#rmPhoto')) $('#rmPhoto').onclick = () => {
+    if (!confirm('Retirer la photo du véhicule ?')) return;
+    Photos.del(c.photoId); if (c.photoOrigId) Photos.del(c.photoOrigId);
+    c.photoId = c.photoOrigId = ''; save(); render();
+  };
   $('#addCtPhoto').onclick = async () => {
     const files = await pickImages(true); if (!files.length) return;
     c.ctPhotos = c.ctPhotos || [];
@@ -356,7 +451,7 @@ function vCarEdit({ id }) {
   $('#save').onclick = saveCar;
   if ($('#del')) $('#del').onclick = () => {
     if (!confirm('Supprimer ce véhicule et tout son historique d’entretien ?')) return;
-    [c.photoId, ...(c.ctPhotos || [])].filter(Boolean).forEach(p => Photos.del(p));
+    [c.photoId, c.photoOrigId, ...(c.ctPhotos || [])].filter(Boolean).forEach(p => Photos.del(p));
     data.voitures = data.voitures.filter(v => v.id !== id);
     data.entretiens = data.entretiens.filter(e => e.carId !== id);
     save(); stack = [{ v: 'garage' }]; render(); toast('Véhicule supprimé');
@@ -527,7 +622,7 @@ function vSettings() {
     <button class="btn btn-ghost" style="margin-top:10px" id="exp">Exporter mes données</button>
     <button class="btn btn-ghost" id="imp">Importer une sauvegarde</button>
     <input type="file" id="file" accept="application/json,.json" hidden>
-    <div class="hint" style="text-align:center;margin-top:24px">Mon Garage · v1.2</div>`;
+    <div class="hint" style="text-align:center;margin-top:24px">Mon Garage · v1.4</div>`;
   $$('#theme button').forEach(b => b.onclick = () => { r.theme = b.dataset.t; save(); applyTheme(); render(); });
   $('#sj').onchange = e => { r.seuilJours = Number(e.target.value); save(); };
   $('#sk').onchange = e => { r.seuilKm = Number(e.target.value); save(); };
@@ -535,7 +630,7 @@ function vSettings() {
   if ($('#test')) $('#test').onclick = () => notify('Mon Garage', 'Les notifications fonctionnent 👍', 'test');
   $('#icsAll').onclick = () => exportICS(data.voitures);
   $('#exp').onclick = async () => {
-    const ids = data.voitures.flatMap(v => [v.photoId, ...(v.ctPhotos || [])]).filter(Boolean);
+    const ids = data.voitures.flatMap(v => [v.photoId, v.photoOrigId, ...(v.ctPhotos || [])]).filter(Boolean);
     const photos = {};
     for (const id of ids) {
       const b = await Photos.get(id);

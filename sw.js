@@ -1,6 +1,6 @@
 /* Service worker : fonctionnement hors ligne + notifications. */
-const VERSION = 'mon-garage-v3';
-const SHELL = ['./', 'index.html', 'style.css', 'core.js', 'app.js', 'manifest.json', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
+const VERSION = 'mon-garage-v5';
+const SHELL = ['./', 'index.html', 'style.css', 'core.js', 'pdf.js', 'app.js', 'manifest.json', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 importScripts('core.js');
 
 self.addEventListener('install', e => {

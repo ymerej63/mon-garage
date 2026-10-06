@@ -231,3 +231,19 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .seg { display: flex; background: var(--bg); border-radius: 12px; padding: 3px; gap: 3px; }
 .seg button { flex: 1; border: 0; background: transparent; padding: 9px 6px; border-radius: 9px; font-size: 15px; font-weight: 600; color: var(--muted); cursor: pointer; }
 .seg button.on { background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+
+/* Recadrage photo */
+.cropper { position: fixed; inset: 0; z-index: 80; background: #0b0c0f; color: #fff; display: flex; flex-direction: column; padding: calc(14px + var(--safe-t)) 16px calc(16px + var(--safe-b)); }
+.crop-head { position: relative; z-index: 1; text-align: center; font-weight: 700; font-size: 18px; padding: 6px 0 4px; }
+.crop-stage { flex: 1; min-height: 0; display: grid; place-items: center; }
+.crop-frame { position: relative; overflow: hidden; border-radius: 14px; touch-action: none; cursor: grab; box-shadow: 0 0 0 2px #fff, 0 0 0 100vmax rgba(0,0,0,.6); }
+.crop-frame img { position: absolute; top: 0; left: 0; transform-origin: 0 0; max-width: none; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.crop-frame::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to right, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) calc(33% + 1px), transparent calc(33% + 1px), transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) calc(66% + 1px), transparent calc(66% + 1px)),
+              linear-gradient(to bottom, transparent 33%, rgba(255,255,255,.35) 33%, rgba(255,255,255,.35) calc(33% + 1px), transparent calc(33% + 1px), transparent 66%, rgba(255,255,255,.35) 66%, rgba(255,255,255,.35) calc(66% + 1px), transparent calc(66% + 1px)); }
+.crop-tools { position: relative; z-index: 1; }
+.crop-tools .hint { display: block; text-align: center; color: #9aa0aa; padding: 0 0 8px; }
+.crop-zoom { width: 100%; accent-color: var(--accent); margin-bottom: 14px; }
+.crop-btns { display: flex; gap: 10px; }
+.crop-btns .btn { margin: 0; }
+.cropper .btn-ghost { background: #22252c; color: #fff; }
