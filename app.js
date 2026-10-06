@@ -35,6 +35,63 @@ const ICO = {
   car: '<svg viewBox="0 0 24 24"><path d="M5 16l1.5-5h11L19 16"/><rect x="3" y="16" width="18" height="4" rx="1"/><circle cx="7.5" cy="20" r="1.5"/><circle cx="16.5" cy="20" r="1.5"/></svg>'
 };
 
+/* ---------- Photos (stockées dans IndexedDB, compressées) ---------- */
+const Photos = {
+  _db: null, _urls: {},
+  db() {
+    return this._db || (this._db = new Promise((res, rej) => {
+      const r = indexedDB.open('mongarage-photos', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('p');
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    }));
+  },
+  async tx(mode, fn) {
+    const db = await this.db();
+    return new Promise((res, rej) => { const t = db.transaction('p', mode); const r = fn(t.objectStore('p')); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); });
+  },
+  put(id, blob) { delete this._urls[id]; return this.tx('readwrite', s => s.put(blob, id)); },
+  get(id) { return this.tx('readonly', s => s.get(id)); },
+  del(id) { if (this._urls[id]) URL.revokeObjectURL(this._urls[id]); delete this._urls[id]; return this.tx('readwrite', s => s.delete(id)); },
+  async url(id) {
+    if (this._urls[id]) return this._urls[id];
+    const b = await this.get(id); if (!b) return '';
+    return this._urls[id] = URL.createObjectURL(b);
+  }
+};
+// Réduit la photo (le CT reste lisible) avant stockage
+function compress(file, max, quality) {
+  return new Promise((res, rej) => {
+    const img = new Image(), u = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(u); cv.toBlob(b => b ? res(b) : rej(), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(u); rej(); };
+    img.src = u;
+  });
+}
+function pickImages(multiple) {
+  return new Promise(res => {
+    const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.multiple = !!multiple;
+    i.onchange = () => res([...i.files]); i.click();
+  });
+}
+async function hydratePhotos(root = document) {
+  for (const el of $$('[data-photo]', root)) { const u = await Photos.url(el.dataset.photo); if (u) el.src = u; }
+}
+function viewPhoto(id, onDelete) {
+  const v = $('#viewer');
+  v.innerHTML = `<img data-photo="${id}" alt=""><div class="viewer-bar"><button class="btn btn-ghost" id="vClose">Fermer</button>${onDelete ? '<button class="btn btn-danger" id="vDel">Supprimer</button>' : ''}</div>`;
+  v.hidden = false; hydratePhotos(v);
+  $('#vClose').onclick = () => v.hidden = true;
+  if (onDelete) $('#vDel').onclick = () => { if (confirm('Supprimer cette photo ?')) { v.hidden = true; onDelete(); } };
+}
+function carVisual(c, cls = '') {
+  return c.photoId ? `<img class="car-photo ${cls}" data-photo="${c.photoId}" alt="">` : silhouette(c.couleur);
+}
+
 function silhouette(couleur = '#9aa3b5') {
   return `<svg class="sil" viewBox="0 0 300 120" style="stroke:none">
     <path d="M18 86 Q16 70 30 66 L70 60 Q96 37 122 33 L196 31 Q216 32 236 50 L264 58 Q284 63 285 79 L285 88 Q285 93 279 93 L250 93 A26 26 0 0 0 198 93 L102 93 A26 26 0 0 0 50 93 L25 93 Q18 93 18 86Z" fill="${esc(couleur)}"/>
@@ -78,6 +135,7 @@ function render() {
   const s = stack[stack.length - 1];
   const views = { garage: vGarage, car: vCar, carEdit: vCarEdit, plan: vPlan, entretien: vEntretien, history: vHistory, agenda: vAgenda, settings: vSettings };
   (views[s.v] || vGarage)(s);
+  hydratePhotos(view);
 }
 
 /* ---------- Garage ---------- */
@@ -101,10 +159,10 @@ function vGarage() {
       const n = al.filter(a => a.carId === c.id && a.kind === 'entretien' && a.statut !== 'ok');
       const late = n.some(a => a.statut === 'late');
       return `<div class="card car-tile" data-id="${c.id}">
-        ${silhouette(c.couleur)}
+        ${carVisual(c)}
         <div class="info">
           <div class="name">${esc(C.nomVoiture(c))}</div>
-          <div class="sub">${esc([c.surnom ? [c.marque, c.modele].filter(Boolean).join(' ') : '', c.version, c.immat].filter(Boolean).join(' · ') || 'Profil à compléter')}</div>
+          <div class="sub">${esc([c.surnom ? [c.marque, c.modele].filter(Boolean).join(' ') : '', c.immat].filter(Boolean).join(' · ') || 'Profil à compléter')}</div>
           <div class="chips">${c.principale ? '<span class="chip main">Principale</span>' : ''}${chipCT(c)}${n.length ? `<span class="chip ${late ? 'late' : 'warn'}">${n.length} entretien${n.length > 1 ? 's' : ''}</span>` : ''}</div>
         </div>${ICO.chev}</div>`;
     }).join('') + `<button class="btn btn-outline fab-add" id="add">Ajouter un véhicule</button>`;
@@ -130,7 +188,10 @@ function vCar({ id }) {
 
   view.innerHTML = `
     <div class="card hero">
-      ${silhouette(c.couleur)}
+      <div class="hero-visual" id="carPic">${carVisual(c)}
+        <button class="photo-btn" id="chgPhoto" aria-label="Changer la photo"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+      </div>
+      <div class="photo-links"><a id="chgPhoto2">${c.photoId ? 'Changer la photo' : 'Ajouter une photo'}</a>${c.photoId ? ' · <a id="rmPhoto">Retirer</a>' : ''}</div>
       ${c.surnom ? `<div class="nick">${esc(c.surnom)}</div>` : ''}
       ${c.immat ? `<div class="plate">${esc(c.immat)}</div>` : ''}
       <button class="btn btn-outline" id="details">Voir les détails de la voiture</button>
@@ -142,6 +203,12 @@ function vCar({ id }) {
       <div class="ct-big"><div class="days" style="color:${ctColor}">${ctJ === null ? '—' : ctJ < 0 ? 'Dépassé' : ctJ + ' j'}<small>${ct ? (ctJ < 0 ? 'depuis le ' : 'avant le ') + fmtDate(ct) : 'Renseignez la date du dernier CT'}</small></div></div>
       <div class="row"><label for="ctD">Dernier contrôle</label><input type="date" id="ctD" value="${esc(c.ctDernier || '')}"></div>
       <div class="row"><label for="ctP">Prochain contrôle</label><input type="date" id="ctP" value="${esc(c.ctProchain || '')}"></div>
+      <div class="ct-photos">
+        <div class="lbl">Procès-verbal du contrôle</div>
+        <div class="thumbs">${(c.ctPhotos || []).map(p => `<img class="thumb" data-photo="${p}" data-id="${p}" alt="">`).join('')}
+          <button class="thumb add" id="addCtPhoto" aria-label="Ajouter une photo du CT"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Photo</span></button>
+        </div>
+      </div>
     </div>
     <div class="hint">Sans date saisie, le prochain CT est calculé : dernier CT + 2 ans, ou 1<sup>re</sup> mise en circulation + 4 ans.</div>
 
@@ -191,6 +258,30 @@ function vCar({ id }) {
   $('#ics').onclick = () => exportICS([c]);
   $$('.due').forEach(el => el.onclick = () => go('entretien', { carId: id, preset: el.dataset.type }));
   $$('.hist').forEach(el => el.onclick = () => go('entretien', { carId: id, entId: el.dataset.id }));
+
+  const changePhoto = async () => {
+    const [f] = await pickImages(false); if (!f) return;
+    try {
+      const blob = await compress(f, 1200, 0.82), pid = 'car-' + uid();
+      await Photos.put(pid, blob);
+      if (c.photoId) Photos.del(c.photoId);
+      c.photoId = pid; save(); render(); toast('Photo mise à jour');
+    } catch (e) { toast('Impossible de lire cette image'); }
+  };
+  $('#chgPhoto').onclick = changePhoto;
+  $('#chgPhoto2').onclick = changePhoto;
+  if ($('#rmPhoto')) $('#rmPhoto').onclick = () => { if (!confirm('Retirer la photo du véhicule ?')) return; Photos.del(c.photoId); c.photoId = ''; save(); render(); };
+  $('#addCtPhoto').onclick = async () => {
+    const files = await pickImages(true); if (!files.length) return;
+    c.ctPhotos = c.ctPhotos || [];
+    for (const f of files) {
+      try { const pid = 'ct-' + uid(); await Photos.put(pid, await compress(f, 2000, 0.85)); c.ctPhotos.push(pid); } catch (e) { toast('Une image n’a pas pu être lue'); }
+    }
+    save(); render();
+  };
+  $$('.thumb[data-id]').forEach(t => t.onclick = () => viewPhoto(t.dataset.id, () => {
+    Photos.del(t.dataset.id); c.ctPhotos = c.ctPhotos.filter(p => p !== t.dataset.id); save(); render();
+  }));
 
   $('#ctD').onchange = e => { c.ctDernier = e.target.value; save(); render(); };
   $('#ctP').onchange = e => { c.ctProchain = e.target.value; save(); render(); };
@@ -243,7 +334,6 @@ function vCarEdit({ id }) {
     <div class="card">
       ${inp('Marque', 'marque', c.marque, { ph: 'Peugeot' })}
       ${inp('Modèle', 'modele', c.modele, { ph: '306' })}
-      ${inp('Version / moteur', 'version', c.version, { ph: '1.4 75 ch' })}
       ${inp('Année', 'annee', c.annee, { type: 'number', mode: 'numeric', ph: '1997' })}
       <div class="row"><label for="f-carrosserie">Carrosserie</label>${sel('carrosserie', c.carrosserie)}</div>
       <div class="row"><label for="f-carburant">Carburant</label>${sel('carburant', c.carburant)}</div>
@@ -266,6 +356,7 @@ function vCarEdit({ id }) {
   $('#save').onclick = saveCar;
   if ($('#del')) $('#del').onclick = () => {
     if (!confirm('Supprimer ce véhicule et tout son historique d’entretien ?')) return;
+    [c.photoId, ...(c.ctPhotos || [])].filter(Boolean).forEach(p => Photos.del(p));
     data.voitures = data.voitures.filter(v => v.id !== id);
     data.entretiens = data.entretiens.filter(e => e.carId !== id);
     save(); stack = [{ v: 'garage' }]; render(); toast('Véhicule supprimé');
@@ -413,6 +504,10 @@ function vSettings() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const r = data.reglages;
   view.innerHTML = `
+    <div class="section-title">Apparence</div>
+    <div class="card pad"><div class="seg" id="theme">${[['auto', 'Automatique'], ['light', 'Clair'], ['dark', 'Sombre']].map(([k, l]) => `<button data-t="${k}" class="${(r.theme || 'auto') === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    <div class="hint">« Automatique » suit le réglage clair/sombre de l'iPhone.</div>
+
     <div class="section-title">Notifications</div>
     <div class="card">
       <div class="row"><span class="lbl">État</span><span class="val">${perm === 'granted' ? 'Activées' : perm === 'denied' ? 'Refusées' : perm === 'unsupported' ? 'Non disponibles' : 'Désactivées'}</span></div>
@@ -432,13 +527,22 @@ function vSettings() {
     <button class="btn btn-ghost" style="margin-top:10px" id="exp">Exporter mes données</button>
     <button class="btn btn-ghost" id="imp">Importer une sauvegarde</button>
     <input type="file" id="file" accept="application/json,.json" hidden>
-    <div class="hint" style="text-align:center;margin-top:24px">Mon Garage · v1.0</div>`;
+    <div class="hint" style="text-align:center;margin-top:24px">Mon Garage · v1.2</div>`;
+  $$('#theme button').forEach(b => b.onclick = () => { r.theme = b.dataset.t; save(); applyTheme(); render(); });
   $('#sj').onchange = e => { r.seuilJours = Number(e.target.value); save(); };
   $('#sk').onchange = e => { r.seuilKm = Number(e.target.value); save(); };
   if ($('#en')) $('#en').onclick = enableNotifs;
   if ($('#test')) $('#test').onclick = () => notify('Mon Garage', 'Les notifications fonctionnent 👍', 'test');
   $('#icsAll').onclick = () => exportICS(data.voitures);
-  $('#exp').onclick = () => shareOrDownload('mon-garage-' + C.iso(C.today()) + '.json', JSON.stringify(data, null, 2), 'application/json');
+  $('#exp').onclick = async () => {
+    const ids = data.voitures.flatMap(v => [v.photoId, ...(v.ctPhotos || [])]).filter(Boolean);
+    const photos = {};
+    for (const id of ids) {
+      const b = await Photos.get(id);
+      if (b) photos[id] = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });
+    }
+    shareOrDownload('mon-garage-' + C.iso(C.today()) + '.json', JSON.stringify({ ...data, photos }), 'application/json');
+  };
   $('#imp').onclick = () => $('#file').click();
   $('#file').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -446,6 +550,8 @@ function vSettings() {
       const d = JSON.parse(await f.text());
       if (!Array.isArray(d.voitures)) throw 0;
       if (!confirm('Remplacer les données actuelles par cette sauvegarde ?')) return;
+      const photos = d.photos || {}; delete d.photos;
+      for (const [id, url] of Object.entries(photos)) await Photos.put(id, await (await fetch(url)).blob());
       data = { reglages: {}, entretiens: [], ...d }; save(); toast('Sauvegarde importée'); render();
     } catch (err) { toast('Fichier invalide'); }
   };
@@ -534,6 +640,17 @@ async function shareOrDownload(name, content, type) {
   if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
+
+/* ---------- Thème clair / sombre ---------- */
+function applyTheme() {
+  const t = data.reglages.theme;
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name=theme-color]').content = dark ? '#0f1115' : '#f4f4f5';
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+applyTheme();
 
 /* ---------- Démarrage ---------- */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then(() => { registerPeriodic(); checkNotifs(); }).catch(() => {});

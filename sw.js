@@ -1,5 +1,5 @@
 /* Service worker : fonctionnement hors ligne + notifications. */
-const VERSION = 'mon-garage-v1';
+const VERSION = 'mon-garage-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'core.js', 'app.js', 'manifest.json', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 importScripts('core.js');
 

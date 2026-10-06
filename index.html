@@ -12,6 +12,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="style.css">
+  <script>try { var t = (JSON.parse(localStorage.getItem('mongarage.v1')) || {}).reglages; t = t && t.theme; if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
   <header class="topbar">
@@ -44,6 +45,7 @@
   <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
   <div class="sheet" id="sheet" hidden></div>
   <div class="toast" id="toast" hidden></div>
+  <div class="viewer" id="viewer" hidden></div>
 
   <script src="core.js"></script>
   <script src="app.js"></script>
